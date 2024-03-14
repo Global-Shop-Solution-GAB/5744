@@ -1,0 +1,214 @@
+﻿Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Bix
+'Date: 28 Oct 2019
+'Modified by: Arturo Almaguer 5/12/2021
+'GCG_5744_PO_Apply_Frght.g2u
+'Brunswick Steel
+'Program that allows users to enter the Freight and Other costs on the PO Header and populate them on the PO Receipts screen.
+V.Local.sError.Declare
+V.Local.sPO.Declare
+V.Local.fFreight.Declare
+V.Local.fOther.Declare
+
+F.Intrinsic.Control.Try
+
+F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+	F.Intrinsic.Control.Case(15021)
+		'PO Receipts header Hook, after selecting PO
+		F.Intrinsic.String.LPad(V.Passed.000002,"0",7,V.Local.sPO)
+		F.Intrinsic.Control.CallSub(GetFreightAndOther,"PO",V.Local.sPO)
+		'Return V.Args.Freight and V.Args.Other
+		F.Intrinsic.String.Format(V.Args.Freight,"#,###,##0.0000",V.Local.fFreight)
+		V.Passed.000008.Set(V.Local.fFreight)
+		F.Intrinsic.String.Format(V.Args.Other,"#,###,##0.0000",V.Local.fOther)
+		V.Passed.000145.Set(V.Local.fOther)
+		
+	F.Intrinsic.Control.Case(16850)
+		'PO Header Populate Hook
+		F.Intrinsic.Control.If(V.Caller.Switches,!=,"V","and",V.Caller.Switches,!=,"D")
+			'view or delete screen the boxes need to be locked so no changes are made
+			F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-2,"LOCK",0)
+			F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-3,"LOCK",0)
+		F.Intrinsic.Control.EndIf
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-2","PL",685)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-2","PT",412)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-2","PW",75)
+		V.Passed.GAB-LBL-2.Set("Freight")
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-LBL-2,"HIDE",0)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-3","PL",685)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-3","PT",455)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-3","PW",75)
+		V.Passed.GAB-LBL-3.Set("Other")
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-LBL-3,"HIDE",0)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-2","PL",681)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-2","PT",429)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-2","PW",95)
+		V.Passed.GAB-TEXT-2.Set("0.0000")
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-2,"TABSTOP",1)
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-2,"HIDE",0)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-3","PL",681)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-3","PT",472)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-3","PW",95)
+		V.Passed.GAB-TEXT-3.Set("0.0000")
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-3,"TABSTOP",1)
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-3,"HIDE",0)
+		'Blocking my controls RESIZE TIME
+		F.Intrinsic.Variable.SetProperty("000135","PW",110)
+		
+		F.Intrinsic.Control.If(V.Passed.000008.Trim,<>,"")
+			F.Intrinsic.String.LPad(V.Passed.000008,"0",7,V.Local.sPO)
+			F.Intrinsic.Control.CallSub(GetFreightAndOther,"PO",V.Local.sPO)
+			'Return V.Args.Freight and V.Args.Other
+			F.Intrinsic.String.Format(V.Args.Freight,"#,###,##0.0000",V.Passed.GAB-TEXT-2)
+			F.Intrinsic.String.Format(V.Args.Other,"#,###,##0.0000",V.Passed.GAB-TEXT-3)
+		F.Intrinsic.Control.EndIf
+		
+		
+	F.Intrinsic.Control.Case(16855)
+		'PO Header PO Change Hook, after selecting a PO to update
+		F.Intrinsic.String.LPad(V.Passed.000008,"0",7,V.Local.sPO)
+		F.Intrinsic.Control.CallSub(GetFreightAndOther,"PO",V.Local.sPO)
+		'Return V.Args.Freight and V.Args.Other
+		F.Intrinsic.String.Format(V.Args.Freight,"#,###,##0.0000",V.Passed.GAB-TEXT-2)
+		F.Intrinsic.String.Format(V.Args.Other,"#,###,##0.0000",V.Passed.GAB-TEXT-3)
+		
+	F.Intrinsic.Control.Case(16870)
+		'PO Header Pre Save Hook
+		F.Intrinsic.String.LPad(V.Passed.000008,"0",7,V.Local.sPO)
+		F.Intrinsic.Control.CallSub(SetFreightAndOther,"PO",V.Local.sPO,"Freight",V.Passed.GAB-TEXT-2.Float,"Other",V.Passed.GAB-TEXT-3.Float, "FRTVendorCode", V.Passed.000032)
+		
+	F.Intrinsic.Control.Case(16880)
+		'PO Header Post Delete Hook
+		F.Intrinsic.String.LPad(V.Passed.000008,"0",7,V.Local.sPO)
+		F.Intrinsic.Control.CallSub(DelFreightAndOther,"PO",V.Local.sPO)
+		
+	F.Intrinsic.Control.Case(16902)
+		'PO Header GAB Text 2 Change Hook (Freight)
+		F.Intrinsic.Control.If(V.Passed.GAB-TEXT-2.IsNumeric)
+			'Numeric response, so format it
+			F.Intrinsic.String.Format(V.Passed.GAB-TEXT-2.Trim,"#,###,##0.0000",V.Passed.GAB-TEXT-2)
+		F.Intrinsic.Control.Else
+			V.Passed.GAB-TEXT-2.Set("0.0000")
+		F.Intrinsic.Control.EndIf
+
+	F.Intrinsic.Control.Case(16903)
+		'PO Header GAB Text 3 Change Hook (Other)
+		F.Intrinsic.Control.If(V.Passed.GAB-TEXT-3.IsNumeric)
+			'Numeric response, so format it
+			F.Intrinsic.String.Format(V.Passed.GAB-TEXT-3.Trim,"#,###,##0.0000",V.Passed.GAB-TEXT-3)
+		F.Intrinsic.Control.Else
+			V.Passed.GAB-TEXT-3.Set("0.0000")
+		F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.EndSelect
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+Program.Sub.GetFreightAndOther.Start
+'V.Args.PO
+'Use Passed PO to get previously stored Freight and Other costs if there are any
+V.Local.sError.Declare
+V.Local.sSQL.Declare
+V.Local.fFreight.Declare
+V.Local.fOther.Declare
+F.Intrinsic.Control.Try
+
+	F.Intrinsic.String.Build("select FREIGHT, OTHER from GCG_5744_FRGHT_OTH where PO = '{0}';", V.Args.PO, V.Local.sSQL)
+	F.ODBC.Connection!con.OpenCompanyConnection
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+	F.ODBC.Connection!con.Close
+	
+	F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF)
+		'No values stored for PO, default to 0
+		V.Local.fFreight.Set(0.0)
+		V.Local.fOther.Set(0.0)
+	F.Intrinsic.Control.Else
+		'Values found
+		F.Intrinsic.String.Split(V.Local.sSQL,"*!*",V.Local.sSQL)
+		V.Local.fFreight.Set(V.Local.sSQL(0).Float)
+		V.Local.fOther.Set(V.Local.sSQL(1).Float)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Variable.AddRV("Freight",V.Local.fFreight)
+	F.Intrinsic.Variable.AddRV("Other",V.Local.fOther)
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.GetFreightAndOther.End
+Program.Sub.SetFreightAndOther.Start
+'V.Args.PO, V.Args.Freight, V.Args.Other
+'Use Passed PO, Freight, Other to update/insert stored Freight and Other costs
+V.Local.sError.Declare
+V.Local.sSQL.Declare
+V.Local.sFRTVendorCode.Declare(String)
+V.Local.sFRTVendor.Declare(String)
+
+F.Intrinsic.Control.Try
+	V.Local.sFRTVendorCode.Set(V.Args.FRTVendorCode)
+	'Check if Freight Vendor is populated
+	F.Intrinsic.Control.If(V.Local.sFRTVendorCode, <>, "")
+
+		F.ODBC.Connection!con.OpenCompanyConnection
+		F.Intrinsic.String.Build("select NAME_VENDOR from V_VENDOR_MASTER where VENDOR = '{0}';", V.Local.sFRTVendorCode,V.Local.sSQL)
+		F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sFRTVendor)
+		
+		F.Intrinsic.String.Build("select 1 from GCG_5744_FRGHT_OTH where PO = '{0}';",V.Args.PO,V.Local.sSQL)
+		F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+		F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF)
+			'PO not found on table, build insert statement
+			F.Intrinsic.String.Build("insert into GCG_5744_FRGHT_OTH (PO, FREIGHT, OTHER, FRT_VENDOR_CODE, FRT_VENDOR, FLAG_FRTPO_RECEIVED) values ('{0}', {1}, {2}, '{3}', '{4}', 'N');", V.Args.PO, V.Args.Freight, V.Args.Other, V.Local.sFRTVendorCode,V.Local.sFRTVendor, V.Local.sSQL)
+		F.Intrinsic.Control.Else
+			'PO found on table, build update statement
+			F.Intrinsic.String.Build("update GCG_5744_FRGHT_OTH set FREIGHT = {1}, OTHER = {2}, FRT_VENDOR_CODE = '{3}', FRT_VENDOR = '{4}' where PO = '{0}';", V.Args.PO, V.Args.Freight, V.Args.Other, V.Local.sFRTVendorCode, V.Local.sFRTVendor, V.Local.sSQL)
+		F.Intrinsic.Control.EndIf
+		F.ODBC.Connection!con.Execute(V.Local.sSQL)
+		F.ODBC.Connection!con.Close
+
+	F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.SetFreightAndOther.End
+Program.Sub.DelFreightAndOther.Start
+'V.Args.PO
+'Use Passed PO to delete stored Freight and Other costs
+V.Local.sError.Declare
+V.Local.sSQL.Declare
+F.Intrinsic.Control.Try
+
+	F.ODBC.Connection!con.OpenCompanyConnection
+	F.Intrinsic.String.Build("delete from GCG_5744_FRGHT_OTH where PO = '{0}';",V.Args.PO,V.Local.sSQL)
+	F.ODBC.Connection!con.Execute(V.Local.sSQL)
+	F.ODBC.Connection!con.Close
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Caller.ScriptFile,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.DelFreightAndOther.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$triley$}$20230113143246209$}$iK6nerqp9nur1h1iSBfRKBBz1ENCgYv6V1+mgrCK/sdAyXUpKXGaLKmJS+zf1gDoaP2LYW527bQ=
+Program.Sub.Comments.End
