@@ -1,0 +1,179 @@
+﻿Program.Sub.Preflight.Start
+Program.External.Include.Library("6016.lib")
+Program.External.Include.Library("175100.lib")
+
+V.Global.sError.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Arturo Almaguer
+'Date: 10 June 2021
+'Customer: Brunswick Steel
+'This program receives either Partial Freight POs or Total Freight POs and creates its corresponding PO receipt
+'This script is launched off 15040 Post OK hook from PO Receipts Screen
+
+F.Intrinsic.Control.Try
+
+	Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+	
+	V.Local.sSQL.Declare(String)
+	V.Local.sSQL2.Declare(String)
+	V.Local.sPO.Declare(String)
+	V.Local.sFRTPO.Declare(String)
+	V.Local.sPOArray.Declare(String)
+	V.Local.sFreight.Declare(String)
+	V.Local.iReturn.Declare(Long)
+	V.Local.sText.Declare(String)
+	
+	'To store PO number that is receiving a partial PO
+	F.Intrinsic.String.LPad(V.Passed.000002,"0",7,V.Local.sPO)
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Intrinsic.String.Build("select * from GCG_5744_FRGHT_OTH where PO = '{0}' order by FRT_PO DESC limit 1;", V.Local.sPO, V.Local.sSQL)
+	F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.sPOArray)
+	
+	F.Intrinsic.String.Split(V.Local.sPOArray, "*!*", V.Local.sPOArray)
+	F.Intrinsic.Control.If(V.Local.sPOArray(0), <>, "", "AND", V.Local.sPOArray(5), <>,"")
+	'Record exists in custom DB and PO has freight cost assigned AND Freight PO is created already
+		
+		F.Intrinsic.String.Build("select RTRIM(A.PURCHASE_ORDER) PURCHASE_ORDER, RTRIM(B.FRT_PO) FRT_PO, RTRIM(A.FLAG_RECV_CLOSE) FLAG_RECV_CLOSE, RTRIM(B.FLAG_FRTPO_RECEIVED) FLAG_FRTPO_RECEIVED, B.FREIGHT from V_PO_LINES A RIGHT JOIN GCG_5744_FRGHT_OTH B ON A.PURCHASE_ORDER = B.PO where (A.FLAG_RECV_CLOSE = 'N' or A.FLAG_RECV_CLOSE = '' or A.FLAG_RECV_CLOSE is NULL) and B.PO = '{0}' and B.FLAG_FRTPO_RECEIVED = 'N' order by B.PO, A.RECORD_NO;", V.Local.sPO, V.Local.sSQL)
+		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.sSQL2)
+		
+		'If it is not blank it means that user is receiving a Partial PO, if is blank it means that is a total PO receipt or all remaining lines are being closed
+		F.Intrinsic.Control.If(V.Local.sSQL2, <>, "")
+			
+			'Asking the user if they want to change the Freight cost for the new Freight PO that will be generated
+			V.Local.sFreight.Set(V.Local.sPOArray(1))
+			F.Intrinsic.String.Build("A new Freight PO will be generated.{0}Current Freight Cost is: {1}{0}Would you like to keep it for the new Freight PO?", V.Ambient.NewLine, V.Local.sFreight, V.Local.sText)
+			F.Intrinsic.UI.Msgbox(V.Local.sText,"Freight Cost", V.Enum.MsgBoxStyle!YesNo, V.Local.iReturn) 
+			F.Intrinsic.Control.If(V.Local.iReturn,=,V.Enum.MsgBoxResult!No)
+				F.Intrinsic.UI.Inputbox("Setting new Freight Cost", "Please enter the new Freight Cost", ,V.Local.sFreight)
+				F.Intrinsic.String.Format(V.Local.sFreight,"0.0000",V.Local.sFreight)	
+			F.Intrinsic.Control.EndIf
+		
+			'Close Freight PO in Custom DB
+			F.Data.DataTable.CreateFromSQL("dtPartial", "Con", V.Local.sSQL, True)
+			F.Intrinsic.String.Build("update GCG_5744_FRGHT_OTH set FLAG_FRTPO_RECEIVED = 'Y' where PO = '{0}';", V.Local.sPO, V.Local.sSQL) 
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+			
+			'Close Freight PO in PO header
+			V.Local.sFRTPO.Set(V.DataTable.dtPartial(0).FRT_PO!FieldValTrim)
+			F.Intrinsic.String.Build("update PO_HEADER set FLAG_RECV_CLOSED = 'Y' where PURCHASE_ORDER = '{0}' and RECORD_NO = '  A';", V.Local.sFRTPO, V.Local.sSQL) 
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+			
+			'Using callwrapper 6016's library to create Freight PO receipt
+			F.Data.DataTable.AddRow("6016","PO",V.Local.sFRTPO,"Line","001","Bin","","Lot","","Heat","","Serial","","RcvdDate",V.Ambient.Date.FormatYYMMDD,"Qty","1.0","Price", V.DataTable.dtPartial(0).FREIGHT!FieldValTrim,"Closed","Y","RcvToInspection","N")
+			
+			'Calling callwrapper 6016
+			F.Intrinsic.Control.CallSub("6016Sync")
+	
+			'Calling sub to create a new Freight PO with same values as previous one and creates a new record in Custom DB
+			F.Intrinsic.Control.CallSub("NewFPO", "PO", V.Local.sPO, "FRT_VENDOR_CODE", V.Local.sPOArray(4), "FREIGHT", V.Local.sFreight)
+	
+			F.Intrinsic.String.Build("insert into GCG_5744_FRGHT_OTH (PO, FREIGHT, OTHER, FRT_VENDOR, FRT_VENDOR_CODE, FRT_PO, FLAG_FRTPO_RECEIVED) values('{0}','{1}','{2}','{3}','{4}','{5}','N');", V.Local.sPO, V.Local.sFreight, V.Local.sPOArray(2), V.Local.sPOArray(3), V.Local.sPOArray(4), V.Args.NewFPO, V.Local.sSQL)
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+			
+			'Closing datatables
+			F.Data.DataTable.Close("dtPartial")
+			F.Data.DataTable.Close("6016")
+			
+		F.Intrinsic.Control.Else	
+		
+			F.Intrinsic.String.Build("select RTRIM(A.PURCHASE_ORDER) PURCHASE_ORDER, RTRIM(B.FRT_PO) FRT_PO, RTRIM(A.FLAG_RECV_CLOSED) FLAG_RECV_CLOSED, RTRIM(B.FLAG_FRTPO_RECEIVED) FLAG_FRTPO_RECEIVED, B.FREIGHT from V_PO_HEADER A RIGHT JOIN GCG_5744_FRGHT_OTH B ON A.PURCHASE_ORDER = B.PO where A.PURCHASE_ORDER = '{0}' and A.FLAG_RECV_CLOSED = 'Y' and B.FLAG_FRTPO_RECEIVED <> 'Y' order by B.PO", V.Local.sPO, V.Local.sSQL)
+			F.Data.DataTable.CreateFromSQL("dtCloseFRTPO", "Con", V.Local.sSQL, True)
+			
+			'Close Freight PO in Custom DB
+			F.Intrinsic.String.Build("update GCG_5744_FRGHT_OTH set FLAG_FRTPO_RECEIVED = 'Y' where PO = '{0}';", V.Local.sPO, V.Local.sSQL) 
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+			
+			'Close Freight PO in PO header
+			V.Local.sFRTPO.Set(V.DataTable.dtCloseFRTPO(0).FRT_PO!FieldValTrim)
+			F.Intrinsic.String.Build("update PO_HEADER set FLAG_RECV_CLOSED = 'Y' where PURCHASE_ORDER = '{0}' and RECORD_NO = '  A';", V.Local.sFRTPO, V.Local.sSQL) 
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+			
+			'Using callwrapper 6016's library to create Freight PO receipt
+			F.Data.DataTable.AddRow("6016","PO",V.Local.sFRTPO,"Line","001","Bin","","Lot","","Heat","","Serial","","RcvdDate",V.Ambient.Date.FormatYYMMDD,"Qty","1.0","Price", V.DataTable.dtCloseFRTPO(0).FREIGHT!FieldValTrim,"Closed","Y","RcvToInspection","N")
+		
+			'Calling callwrapper 6016
+			F.Intrinsic.Control.CallSub("6016Sync")
+			
+			'Closing datatables
+			F.Data.DataTable.Close("dtCloseFRTPO")
+			F.Data.DataTable.Close("6016")
+		
+		F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.EndIf
+	F.ODBC.Connection!Con.Close
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.Main.End
+Program.Sub.NewFPO.Start
+'This subroutine creates a new Freight PO 
+
+F.Intrinsic.Control.Try
+
+	V.Local.iID.Declare(Long, 1)
+	V.Local.dDueDate.Declare(Date)
+	V.Local.sSQL.Declare(String)
+	V.Local.sPO.Declare(String)
+	V.Local.iFreight.Declare(Long)
+	V.Local.sVendorCode.Declare(String)
+	V.Local.sNewFPO.Declare(String)
+	V.Local.sGL.Declare(String)
+	
+	V.Local.sPO.Set(V.Args.PO)
+	V.Local.iFreight.Set(V.Args.FREIGHT)
+	V.Local.sVendorCode.Set(V.Args.FRT_VENDOR_CODE)
+	
+	'Getting linked GL account
+	F.ODBC.Connection!Con.ExecuteAndReturn("select RTRIM(GL_ACCOUNT) GL_ACCOUNT from GCG_5744_MM", V.Local.sGL)
+	
+	'Getting main PO due date to set Freight PO to same due date
+	F.Intrinsic.String.Build("select DATE_DUE from V_PO_HEADER where PURCHASE_ORDER = '{0}';", V.Local.sPO, V.Local.sSQL)
+	F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.dDueDate)
+	
+	'Using callwrapper 175100's library to create a Freight PO
+	F.Data.DataTable.AddRow("175100","ID",V.Local.iID,"AutoNumber","Y","AddComments","Y","OpenPO","Y")
+	F.Data.DataTable.AddRow("175100File", "ID", V.Local.iID, "Vendor", V.Local.sVendorCode, "Part", "FREIGHT PART", "DueDate", V.Local.dDueDate.FormatYYYYMMDD, "Description", "FREIGHT", "InvUM", "EA", "InvCost", V.Local.iFreight, "InvQty", 1, "POUM", "EA", "POCost", V.Local.iFreight, "POQty", 1, "GLAccount", V.Local.sGL, "Extension", V.Local.iFreight)
+	
+	'Calling callwrapper
+	F.Intrinsic.Control.CallSub("175100Sync")
+	
+	'Closing datatables that are no longer in use
+	F.Data.DataTable.Close("175100")
+	F.Data.DataTable.Close("175100File")
+	
+	'Getting New Freight PO number
+	F.Intrinsic.String.Build("select RTRIM(PURCHASE_ORDER) PURCHASE_ORDER from V_PO_LINES where PART = 'FREIGHT PART' and VENDOR = '{0}' order by PURCHASE_ORDER DESC limit 1", V.Local.sVendorCode, V.Local.sSQL)
+	F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.sNewFPO)
+	
+	'Updating USER_2 in PO_HEADER to distinguish FREIGHT POs from original POs
+	F.Intrinsic.String.Build("update PO_HEADER set USER_2 = 'F', GL_ACCOUNT = '{0}' where PURCHASE_ORDER = '{1}' and RECORD_NO = '  A';", V.Local.sGL, V.Local.sNewFPO, V.Local.sSQL)
+	F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+	
+	'Setting the return variable for the new Freight PO
+	F.Intrinsic.Variable.AddRV("NewFPO", V.Local.sNewFPO)
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.NewFPO.End
+Program.Sub.CatchError.Start
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.SubroutineCalledFrom, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError) 
+F.Intrinsic.UI.Msgbox(V.Global.sError)
+F.Intrinsic.Control.End()
+Program.Sub.CatchError.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$apadilla$}$20210625165838501$}$Lag9STqBJOmNXSbd5+msRcBWPGz0aFqSGjpgCwFu86BD892KwUJPccjr3hd51DXAVanktgjmz0HkOE6Qt+uOMw==
+Program.Sub.Comments.End
