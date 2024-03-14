@@ -1,0 +1,195 @@
+﻿Program.Sub.Preflight.Start
+V.Global.iPOCounter.Declare(Long)
+V.Global.sError.Declare(String)
+V.Global.sProcessID.Declare(String)
+V.Global.sGL.Declare(String)
+
+Program.External.Include.Library("175100.lib")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Arturo Almaguer
+'Date: 7 May 2021
+'Customer: Brunswick Steel
+'Program that creates freight purchase orders, it is set to run on an hourly basis from OLU
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+F.Intrinsic.Control.Try
+	
+	F.Intrinsic.Control.CallSub(PIDCheck)
+	F.Intrinsic.Control.CallSub(LoadFRTData)
+	F.Intrinsic.Control.CallSub(CreatingPOs)
+	F.Intrinsic.Control.CallSub(LinkingPOs)
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.Main.End
+Program.Sub.CreatingPOs.Start
+'This subroutine is creating a new FREIGHT PO for each record in dtFRTPO, which stores all records that don't have a FRT_PO.
+
+F.Intrinsic.Control.Try
+
+	V.Local.iCounter.Declare(Long)
+	V.Local.iID.Declare(Long, 1)
+	V.Local.dDueDate.Declare(Date)
+	V.Local.sSQL.Declare(String)
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	'Getting linked GL account
+	F.ODBC.Connection!Con.ExecuteAndReturn("select RTRIM(GL_ACCOUNT) GL_ACCOUNT from GCG_5744_MM", V.Global.sGL)
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtFRTPO.RowCount--, 1) 
+		
+		'Getting main PO due date to set Freight PO to same due date
+		F.Intrinsic.String.Build("select DATE_DUE from V_PO_HEADER where PURCHASE_ORDER = '{0}';", V.DataTable.dtFRTPO(V.Local.iCounter).PO!FieldValTrim, V.Local.sSQL)
+		F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.dDueDate)
+	
+		'Using callwrapper 175100's library to create a Freight PO
+		F.Data.DataTable.AddRow("175100","ID",V.Local.iID,"AutoNumber","Y","AddComments","Y","OpenPO","Y")
+		F.Data.DataTable.AddRow("175100File", "ID", V.Local.iID, "Vendor", V.DataTable.dtFRTPO(V.Local.iCounter).FRT_VENDOR_CODE!FieldValTrim, "Part", "FREIGHT PART", "DueDate", V.Local.dDueDate.FormatYYYYMMDD, "Description", "FREIGHT", "InvUM", "EA", "InvCost", V.DataTable.dtFRTPO(V.Local.iCounter).FREIGHT!FieldValTrim, "InvQty", 1, "POUM", "EA", "POCost", V.DataTable.dtFRTPO(V.Local.iCounter).FREIGHT!FieldValTrim, "POQty", 1, "GLAccount", V.Global.sGL, "Extension", V.DataTable.dtFRTPO(V.Local.iCounter).FREIGHT!FieldValTrim)
+		F.Intrinsic.Math.Add(V.Local.iID, 1, V.Local.iID)
+		
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	F.ODBC.Connection!Con.Close
+	
+	V.Global.iPOCounter.Set(V.Local.iCounter)
+	
+	'Calling callwrapper
+	F.Intrinsic.Control.CallSub("175100Sync")
+	
+	'Closing datatables that are no longer in use
+	F.Data.DataTable.Close("175100")
+	F.Data.DataTable.Close("175100File")
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.CreatingPOs.End
+Program.Sub.LoadFRTData.Start
+'This subroutine is loading all records stored in GCG_5744_FRGHT_OTH that don't have a FRT_PO yet, so we can proceed to their creation. 
+
+F.Intrinsic.Control.Try
+
+	'To check if datatable already exists
+	F.Intrinsic.Control.If(V.DataTable.dtFRTPO.Exists)
+		F.Data.DataTable.Close("dtFRTPO")
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Data.DataTable.CreateFromSQL("dtFRTPO", "Con", "select RTRIM(PO) PO, FREIGHT, OTHER, RTRIM(FRT_VENDOR) FRT_VENDOR, RTRIM(FRT_VENDOR_CODE) FRT_VENDOR_CODE from GCG_5744_FRGHT_OTH where FRT_PO is null order by PO;", True)
+	F.ODBC.Connection!Con.Close
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.LoadFRTData.End
+Program.Sub.LinkingPOs.Start
+'This subroutine links the previously generated FREIGHT POs to their particular original PO in GCG_5744_FRGHT_OTH
+
+F.Intrinsic.Control.Try
+
+	V.Local.sSQL.Declare(String)
+	V.Local.iCounter.Declare(Long)
+	V.Local.sFRTPO.Declare(String)
+	V.Local.sPO.Declare(String)
+	
+	'To check if datatable already exists
+	F.Intrinsic.Control.If(V.DataTable.dtNewFRTPO.Exists)
+		F.Data.DataTable.Close("dtNewFRTPO")
+	F.Intrinsic.Control.EndIf
+	
+	'Getting the exact number of FREIGHT POs previously generated to identify them in DB and then be able to link each FREIGHT PO to its particular original PO
+	F.Intrinsic.String.Build("select RTRIM(PURCHASE_ORDER) PURCHASE_ORDER from V_PO_LINES where PART = 'FREIGHT PART' order by PURCHASE_ORDER desc limit {0};", V.Global.iPOCounter, V.Local.sSQL)
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Data.DataTable.CreateFromSQL("dtNewFRTPO", "Con", V.Local.sSQL, True)
+	F.ODBC.Connection!Con.Close
+	
+	'Creating a dataview to sort records in an ascending order
+	F.Data.DataView.Create("dtNewFRTPO", "dvNewFRTPO", 22,"","PURCHASE_ORDER ASC")
+	
+	'Writing FREIGHT PO number in GCG_5744_FRGHT_OTH
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtFRTPO.RowCount--, 1) 
+		
+		V.Local.sFRTPO.Set(V.DataView.dtNewFRTPO!dvNewFRTPO(V.Local.iCounter).PURCHASE_ORDER!FieldValTrim)
+		V.Local.sPO.Set(V.DataTable.dtFRTPO(V.Local.iCounter).PO!FieldValTrim)
+		F.Intrinsic.String.Build("update GCG_5744_FRGHT_OTH set FRT_PO = '{0}' where PO = '{1}';", V.Local.sFRTPO, V.Local.sPO, V.Local.sSQL)
+		F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+		'Updating USER_2 in PO_HEADER to distinguish FREIGHT POs from original POs
+		F.Intrinsic.String.Build("update PO_HEADER set USER_2 = 'F', GL_ACCOUNT = '{1}' where PURCHASE_ORDER = '{0}' and RECORD_NO = '  A';", V.Local.sFRTPO, V.Global.sGL, V.Local.sSQL)
+		F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+		
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	F.ODBC.Connection!Con.Close
+
+	'Closing datatables that are no longer in use
+	F.Data.DataTable.Close("dtFRTPO")
+	F.Data.DataView.Close("dtNewFRTPO", "dvNewFRTPO")
+	F.Data.DataTable.Close("dtNewFRTPO")
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+
+Program.Sub.LinkingPOs.End
+Program.Sub.CatchError.Start
+
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.SubroutineCalledFrom, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError) 
+'F.Intrinsic.UI.Msgbox(V.Global.sError)
+f.Intrinsic.Debug.SetLA(V.Global.sError)
+
+f.Intrinsic.Control.CallSub("Unload")
+Program.Sub.CatchError.End
+Program.Sub.Unload.Start
+
+F.Intrinsic.Control.If(V.ODBC.Con.State,=,1)
+    F.ODBC.Connection!Con.Close
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.End
+
+Program.Sub.Unload.End
+Program.Sub.PIDCheck.Start
+F.Intrinsic.Control.Try
+	V.Local.bExists.Declare
+ 	V.Local.sWaitDiag.Declare
+    
+    'PID Check
+	F.Intrinsic.Control.If(v.Caller.Switches,<>,"O")
+	
+	    F.Global.Registry.ReadValue("SUPERVSR",V.Caller.CompanyCode,"Running",5744,"2002",5,"",V.Global.sProcessID)
+	    F.Intrinsic.String.Split(V.Global.sProcessID,"*!*",V.Global.sProcessID)
+	    F.Intrinsic.task.PIDRunning(V.Global.sProcessID(0).Trim,V.Local.bExists)
+	    F.Intrinsic.control.If(V.Local.bExists,=,True,and,V.Global.sProcessID(0).Trim,<>,"")    
+	        F.Intrinsic.Control.CallSub("Unload")
+	    F.Intrinsic.Control.EndIf
+	    V.Global.sProcessID.Redim(0,0)
+	    F.Intrinsic.String.Build("{0}*!*{1}",V.Ambient.PID,V.Ambient.Now,V.Global.sProcessID)
+	    F.Global.Registry.AddValue("SUPERVSR",V.Caller.CompanyCode,"Running",5744,"2002",False,V.Global.sProcessID,False,0,-999.0,1/1/1980,12:00:00 AM)
+	    
+	    'Get Options from the Option file
+	F.Intrinsic.Control.EndIf  
+      
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.PIDCheck.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$apadilla$}$20210614171703227$}$Lag9STqBJOmNXSbd5+msRcBWPGz0aFqSGjpgCwFu86DJHO0++/TMTDU2GDyJH8S8VzXqwmoWgeATDeJKICyOeA==
+Program.Sub.Comments.End
